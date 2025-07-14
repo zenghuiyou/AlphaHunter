@@ -12,7 +12,8 @@ const opportunities = ref<Opportunity[]>([])
 const connectionStatus = ref('正在连接...')
 
 onMounted(() => {
-  const ws = new WebSocket('ws://localhost:8000/ws/dashboard')
+  // 从本地开发环境 (ws://) 切换到云端生产环境 (wss://)
+  const ws = new WebSocket('wss://alphahunter-backend-ojwr.onrender.com/ws/dashboard')
 
   ws.onopen = () => {
     connectionStatus.value = '连接成功！'
