@@ -1,5 +1,6 @@
 import pandas as pd
-from src.data_provider import get_market_data
+from src.data_provider import get_realtime_market_data # 修正：导入正确的函数名
+from src.config import settings  # 导入配置
 
 
 def scan_opportunities(market_data: pd.DataFrame) -> pd.DataFrame:
@@ -16,8 +17,9 @@ def scan_opportunities(market_data: pd.DataFrame) -> pd.DataFrame:
         一个新的Pandas DataFrame，仅包含符合条件的交易机会。
         如果没有找到机会，则返回一个空的DataFrame。
     """
-    # 简单的扫描规则：寻找日变化百分比大于2%的股票
-    opportunities = market_data[market_data['change_pct'] > 2.0]
+    # 使用配置中的阈值，而不是硬编码的值
+    threshold = settings.SCANNER_CHANGE_PCT_THRESHOLD
+    opportunities = market_data[market_data['change_pct'] > threshold]
     return opportunities
 
 
@@ -25,13 +27,13 @@ def scan_opportunities(market_data: pd.DataFrame) -> pd.DataFrame:
 if __name__ == '__main__':
     print("--- 启动机会扫描引擎 ---")
     # 1. 获取原始市场数据
-    current_market_data = get_market_data()
+    current_market_data = get_realtime_market_data() # 修正：调用正确的函数名
     print("\n[1] 原始市场数据:")
-    print(current_market_data)
+    print(current_market_data.head()) # 打印部分数据即可
 
     # 2. 扫描机会
     found_opportunities = scan_opportunities(current_market_data)
-    print("\n[2] 扫描发现的机会 (change_pct > 2.0):")
+    print(f"\n[2] 扫描发现的机会 (change_pct > {settings.SCANNER_CHANGE_PCT_THRESHOLD}%):")
 
     if not found_opportunities.empty:
         print(found_opportunities)

@@ -1,32 +1,84 @@
 import pandas as pd
-import numpy as np
+import baostock as bs
+from datetime import datetime, timedelta
 
+def get_realtime_market_data() -> pd.DataFrame:
+    """
+    从BaoStock API获取A股市场的最新交易日行情快照数据。
+    返回一个经过清洗和重命名的DataFrame，列包括：
+    'ticker', 'price', 'volume', 'change_pct'
+    """
+    # 1. 登录系统
+    lg = bs.login()
+    if lg.error_code != '0':
+        print(f"错误: 登录BaoStock失败: {lg.error_msg}")
+        return pd.DataFrame()
 
-def get_market_data() -> pd.DataFrame:
-    """
-    生成模拟的中国A股市场数据。
-    返回一个包含股票代码、价格、成交量和涨跌幅的DataFrame。
-    """
-    # 使用典型的A股股票代码（.SH代表上海, .SZ代表深圳）
-    tickers = [
-        '600519.SH', '000858.SZ', '601318.SH', '002415.SZ', 
-        '600036.SH', '300750.SZ', '000001.SZ'
-    ]
-    
-    data = {
-        'ticker': np.random.choice(tickers, 5),
-        # A股股价范围更广
-        'price': np.random.uniform(10, 300, 5),
-        'volume': np.random.randint(1_000_000, 50_000_000, 5),
-        # A股涨跌停为10%（创业板/科创板20%），这里我们模拟一个更常见的波动范围
-        'change_pct': np.random.uniform(-5, 5, 5)
-    }
-    
-    return pd.DataFrame(data)
+    try:
+        # 2. 获取A股所有股票列表
+        rs = bs.query_all_stock(day=datetime.today().strftime("%Y-%m-%d"))
+        if rs.error_code != '0':
+            print(f"错误: 查询所有A股列表失败: {rs.error_msg}")
+            return pd.DataFrame()
+        
+        all_stocks = rs.get_data()
+        # 筛选出沪深A股（sh或sz开头），并排除科创板('688')和北交所('bj')
+        a_stocks = all_stocks[
+            (all_stocks['code_name'] != '') & 
+            (all_stocks['code'].str.match(r'^(sh|sz)\.60|^(sh|sz)\.00|^(sh|sz)\.30'))
+        ]
+        all_tickers = a_stocks['code'].to_list()
+
+        # 3. 获取最新交易日的行情数据
+        # BaoStock的实时行情接口有使用限制，我们用日线行情接口获取最新数据作为替代
+        today_str = datetime.today().strftime('%Y-%m-%d')
+        rs_daily = bs.query_history_k_data_plus(
+            ",".join(all_tickers),
+            "code,close,volume,pctChg",
+            start_date=today_str, 
+            end_date=today_str,
+            frequency="d", 
+            adjustflag="3" # 不复权
+        )
+        if rs_daily.error_code != '0':
+            print(f"错误: 查询最新日线行情失败: {rs_daily.error_msg}")
+            return pd.DataFrame()
+
+        market_data = rs_daily.get_data()
+        
+        # 4. 数据清洗和重命名
+        # 将空值（通常是停牌）的行填充为0，并将类型转换为数值
+        market_data.replace('', '0', inplace=True)
+        market_data = market_data.astype({
+            'close': 'float',
+            'volume': 'float',
+            'pctChg': 'float'
+        })
+        
+        # 为了与项目其他部分的代码兼容，我们重命名列
+        market_data.rename(columns={
+            'code': 'ticker',
+            'close': 'price',
+            'volume': 'volume',
+            'pctChg': 'change_pct'
+        }, inplace=True)
+        
+        return market_data[['ticker', 'price', 'volume', 'change_pct']]
+
+    finally:
+        # 5. 登出系统
+        bs.logout()
 
 
 # --- 本地测试代码 ---
 if __name__ == '__main__':
-    market_data = get_market_data()
-    print("--- 模拟获取的市场数据 ---")
-    print(market_data)
+    print("--- 正在从 BaoStock 获取真实市场数据... ---")
+    real_data = get_realtime_market_data()
+    
+    if not real_data.empty:
+        print("--- 成功获取市场数据 ---")
+        # 筛选出非零交易量和价格的数据进行展示
+        active_data = real_data[(real_data['price'] > 0) & (real_data['volume'] > 0)]
+        print(active_data.head())
+    else:
+        print("--- 获取市场数据失败或数据为空 ---")

@@ -12,8 +12,12 @@ const opportunities = ref<Opportunity[]>([])
 const connectionStatus = ref('正在连接...')
 
 onMounted(() => {
-  // 从本地开发环境 (ws://) 切换到云端生产环境 (wss://)
-  const ws = new WebSocket('wss://alphahunter-backend-ojwr.onrender.com/ws/dashboard')
+  // 从环境变量中读取WebSocket URL
+  // Vite会自动根据当前环境 (development/production) 加载对应的.env文件
+  const wsUrl = import.meta.env.VITE_APP_WEBSOCKET_URL || 'ws://localhost:8000/ws/dashboard';
+
+  // 使用获取到的URL建立连接
+  const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     connectionStatus.value = '连接成功！'
