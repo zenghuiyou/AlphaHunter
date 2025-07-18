@@ -22,6 +22,10 @@ def get_realtime_market_data() -> pd.DataFrame:
             return pd.DataFrame()
         
         all_stocks = rs.get_data()
+        if all_stocks.empty:
+            print("警告: 查询到的股票列表为空（可能为非交易日），跳过本轮扫描。")
+            return pd.DataFrame()
+
         # 筛选出沪深A股（sh或sz开头）
         a_stocks = all_stocks[
             all_stocks['code'].str.match(r'^(sh|sz)\.60|^(sh|sz)\.00|^(sh|sz)\.30')
