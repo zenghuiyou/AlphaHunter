@@ -69,6 +69,10 @@ async def background_scanner():
                 opportunity_dict = opportunity_series.to_dict()
                 
                 # 调用AI分析
+                # 注意：这里我们假设AI分析是比较耗时的操作
+                # 在真实的生产环境中，可能需要将这个分析任务放入一个异步的任务队列中
+                # 例如使用 Celery 或 aio-pika，以避免阻塞主扫描循环。
+                # 但对于当前版本的系统，直接调用是可行的。
                 ai_report = get_analysis_from_glm4(opportunity_dict)
                 
                 # 将AI分析结果添加到字典中
@@ -78,7 +82,7 @@ async def background_scanner():
             # 4. 广播包含AI分析的完整数据
             if analyzed_opportunities:
                 opportunities_json = json.dumps(analyzed_opportunities, ensure_ascii=False)
-            await manager.broadcast(opportunities_json)
+                await manager.broadcast(opportunities_json)
                 print(f">>> [后台任务] 已广播 {len(analyzed_opportunities)} 条附带AI分析的机会。")
 
         else:
