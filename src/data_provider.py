@@ -22,9 +22,9 @@ def get_realtime_market_data() -> pd.DataFrame:
             return pd.DataFrame()
         
         all_stocks = rs.get_data()
-        # 筛选出沪深A股（sh或sz开头），并排除科创板('688')和北交所('bj')
+        # 筛选出沪深A股（sh或sz开头），并且是正在交易的股票
         a_stocks = all_stocks[
-            (all_stocks['code_name'] != '') & 
+            (all_stocks['tradeStatus'] == '1') & 
             (all_stocks['code'].str.match(r'^(sh|sz)\.60|^(sh|sz)\.00|^(sh|sz)\.30'))
         ]
         all_tickers = a_stocks['code'].to_list()
