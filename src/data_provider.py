@@ -22,10 +22,9 @@ def get_realtime_market_data() -> pd.DataFrame:
             return pd.DataFrame()
         
         all_stocks = rs.get_data()
-        # 筛选出沪深A股（sh或sz开头），并且是正在交易的股票
+        # 筛选出沪深A股（sh或sz开头）
         a_stocks = all_stocks[
-            (all_stocks['tradeStatus'] == '1') & 
-            (all_stocks['code'].str.match(r'^(sh|sz)\.60|^(sh|sz)\.00|^(sh|sz)\.30'))
+            all_stocks['code'].str.match(r'^(sh|sz)\.60|^(sh|sz)\.00|^(sh|sz)\.30')
         ]
         all_tickers = a_stocks['code'].to_list()
 
@@ -34,7 +33,7 @@ def get_realtime_market_data() -> pd.DataFrame:
         today_str = datetime.today().strftime('%Y-%m-%d')
         rs_daily = bs.query_history_k_data_plus(
             ",".join(all_tickers),
-            "code,close,volume,pctChg",
+            "code,close,volume,pctChg,tradeStatus", # 增加请求 tradeStatus 字段
             start_date=today_str, 
             end_date=today_str,
             frequency="d", 
@@ -49,11 +48,16 @@ def get_realtime_market_data() -> pd.DataFrame:
         # 4. 数据清洗和重命名
         # 将空值（通常是停牌）的行填充为0，并将类型转换为数值
         market_data.replace('', '0', inplace=True)
+        # 增加对 tradeStatus 的处理
         market_data = market_data.astype({
             'close': 'float',
             'volume': 'float',
-            'pctChg': 'float'
+            'pctChg': 'float',
+            'tradeStatus': 'int'
         })
+        
+        # 关键修复：在获取到日线数据后再根据交易状态过滤
+        market_data = market_data[market_data['tradeStatus'] == 1]
         
         # 为了与项目其他部分的代码兼容，我们重命名列
         market_data.rename(columns={
