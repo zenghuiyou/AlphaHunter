@@ -2,6 +2,7 @@
 import asyncio
 import json
 from typing import List
+import pandas as pd # Added missing import for pandas
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -48,21 +49,31 @@ async def background_scanner():
     """
     while True:
         print(">>> [后台任务] 开始新一轮扫描...")
-        # 1. 从真实数据源获取数据
+        opportunities_df = pd.DataFrame() # 初始化一个空的DataFrame
+
+        # 1. 尝试从真实数据源获取数据
         market_data = get_realtime_market_data()
         
-        if market_data.empty:
-            print(">>> [后台任务] 未获取到市场数据，跳过本轮扫描。")
-            await asyncio.sleep(60) # 如果获取数据失败，等待更长时间再重试
-            continue
+        if not market_data.empty:
+            # 如果获取到真实数据，则正常扫描机会
+            print(">>> [后台任务] 已获取真实市场数据，正在扫描...")
+            opportunities_df = scan_opportunities(market_data)
+        else:
+            # 如果是周末或休市，未获取到数据，则生成模拟数据用于调试
+            print("--- [调试模式] 未获取到市场数据，正在生成模拟机会... ---")
+            mock_opportunities_data = {
+                'ticker': ['sh.600519', 'sz.000001', 'sh.600036'],
+                'price': [1650.88, 10.5, 35.2],
+                'volume': [30000, 1500000, 800000],
+                'change_pct': [2.5, -1.2, 5.8]
+            }
+            opportunities_df = pd.DataFrame(mock_opportunities_data)
 
-        # 2. 扫描机会
-        opportunities_df = scan_opportunities(market_data)
-        
+        # 检查是否有机会（无论是真实的还是模拟的）
         if not opportunities_df.empty:
-            print(f">>> [后台任务] 发现 {len(opportunities_df)} 个潜在机会，正在进行AI分析...")
+            print(f">>> [后台任务] 发现 {len(opportunities_df)} 个机会，正在进行AI分析...")
             
-            # 3. 对每个机会进行AI分析并准备广播数据
+            # 对每个机会进行AI分析并准备广播数据
             analyzed_opportunities = []
             for index, opportunity_series in opportunities_df.iterrows():
                 # 将Pandas Series转换为字典
@@ -79,7 +90,7 @@ async def background_scanner():
                 opportunity_dict['ai_analysis'] = ai_report
                 analyzed_opportunities.append(opportunity_dict)
             
-            # 4. 广播包含AI分析的完整数据
+            # 广播包含AI分析的完整数据
             if analyzed_opportunities:
                 opportunities_json = json.dumps(analyzed_opportunities, ensure_ascii=False)
                 await manager.broadcast(opportunities_json)

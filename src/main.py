@@ -1,4 +1,4 @@
-from src.data_provider import get_market_data
+from src.data_provider import get_realtime_market_data
 from src.scanner import scan_opportunities
 from src.ai_analyzer import analyze_opportunity
 
@@ -17,7 +17,7 @@ def main():
     
     # 1. 获取数据
     print("\n[1/3] 正在获取市场数据...")
-    market_data = get_market_data()
+    market_data = get_realtime_market_data()
     print("      市场数据获取完毕。")
     
     # 2. 扫描机会
