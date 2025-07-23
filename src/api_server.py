@@ -62,10 +62,10 @@ async def background_scanner():
             # 如果是周末或休市，未获取到数据，则生成模拟数据用于调试
             print("--- [调试模式] 未获取到市场数据，正在生成模拟机会... ---")
             mock_opportunities_data = {
-                'ticker': ['sh.600519', 'sz.000001', 'sh.600036'],
-                'price': [1650.88, 10.5, 35.2],
-                'volume': [30000, 1500000, 800000],
-                'change_pct': [2.5, -1.2, 5.8]
+                'ticker': ['sh.600519'],
+                'price': [1650.88],
+                'volume': [30000],
+                'change_pct': [2.5]
             }
             opportunities_df = pd.DataFrame(mock_opportunities_data)
 
