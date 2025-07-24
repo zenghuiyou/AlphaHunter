@@ -8,7 +8,7 @@ class Settings:
     # --- API Keys ---
     # 强烈建议从环境变量获取，以避免将敏感信息硬编码到代码中
     # 您需要在您的服务器环境中设置这些变量
-    ZHIPUAI_API_KEY: str = os.getenv("ZHIPUAI_API_KEY", "YOUR_ZHIPUAI_API_KEY_HERE")
+    ZHIPUAI_API_KEY: str = os.getenv("ZHIPUAI_API_KEY", "Ycbc6048999334838bd99235c3d83d105.obCizMjN6pVPUeor")
 
     # --- 服务器配置 ---
     SERVER_HOST: str = "0.0.0.0"  # 监听所有网络接口，用于部署

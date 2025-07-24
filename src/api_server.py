@@ -2,19 +2,13 @@
 import asyncio
 import json
 from typing import List
-import pandas as pd # Added missing import for pandas
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-
-# 导入我们重构后的核心逻辑函数
-from src.ai_analyzer import get_analysis_from_glm4
-from src.data_provider import get_realtime_market_data
-from src.scanner import scan_opportunities
+from src.app.logger_config import log
+from src.app.database import init_db
 
 # --- 1. FastAPI应用和CORS配置 ---
-app = FastAPI(title="AlphaHunter API")
+app = FastAPI(title="AlphaHunter API - v4.2 Stable")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 为调试方便，暂时允许所有来源
@@ -23,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 2. 极度简化的WebSocket连接管理器 ---
+# --- 2. WebSocket连接管理器 (不变) ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -31,92 +25,69 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        log.info(f"新的WebSocket连接: {websocket.client.host}:{websocket.client.port}")
 
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
+        log.warning(f"WebSocket连接断开: {websocket.client.host}:{websocket.client.port}")
 
     async def broadcast(self, message: str):
+        log.info(f"广播消息给 {len(self.active_connections)} 个客户端")
         for connection in self.active_connections:
             await connection.send_text(message)
 
 manager = ConnectionManager()
 
-# --- 3. 重构后的后台扫描任务 ---
-async def background_scanner():
+# --- 3. (V4.2 新架构) 文件监视与广播任务 ---
+# 用于存储上一次文件内容的全局变量
+last_known_data = None
+
+async def file_watcher_task():
     """
-    后台任务，定期从Tushare获取数据，扫描机会，调用AI进行分析，
-    然后将结果通过WebSocket广播给所有连接的客户端。
+    后台任务，监视latest_opportunities.json文件的变化，
+    并在内容更新时，将新数据广播给所有客户端。
     """
+    global last_known_data
     while True:
-        print(">>> [后台任务] 开始新一轮扫描...")
-        opportunities_df = pd.DataFrame() # 初始化一个空的DataFrame
-
-        # 1. 尝试从真实数据源获取数据
-        market_data = get_realtime_market_data()
-        
-        if not market_data.empty:
-            # 如果获取到真实数据，则正常扫描机会
-            print(">>> [后台任务] 已获取真实市场数据，正在扫描...")
-            opportunities_df = scan_opportunities(market_data)
-        else:
-            # 如果是周末或休市，未获取到数据，则生成模拟数据用于调试
-            print("--- [调试模式] 未获取到市场数据，正在生成模拟机会... ---")
-            mock_opportunities_data = {
-                'ticker': ['sh.600519'],
-                'price': [1650.88],
-                'volume': [30000],
-                'change_pct': [2.5]
-            }
-            opportunities_df = pd.DataFrame(mock_opportunities_data)
-
-        # 检查是否有机会（无论是真实的还是模拟的）
-        if not opportunities_df.empty:
-            print(f">>> [后台任务] 发现 {len(opportunities_df)} 个机会，正在进行AI分析...")
+        try:
+            with open("latest_opportunities.json", "r", encoding="utf-8") as f:
+                current_data = json.load(f)
             
-            # 对每个机会进行AI分析并准备广播数据
-            analyzed_opportunities = []
-            for index, opportunity_series in opportunities_df.iterrows():
-                # 将Pandas Series转换为字典
-                opportunity_dict = opportunity_series.to_dict()
-                
-                # 调用AI分析
-                # 注意：这里我们假设AI分析是比较耗时的操作
-                # 在真实的生产环境中，可能需要将这个分析任务放入一个异步的任务队列中
-                # 例如使用 Celery 或 aio-pika，以避免阻塞主扫描循环。
-                # 但对于当前版本的系统，直接调用是可行的。
-                ai_report = get_analysis_from_glm4(opportunity_dict)
-                
-                # 将AI分析结果添加到字典中
-                opportunity_dict['ai_analysis'] = ai_report
-                analyzed_opportunities.append(opportunity_dict)
+            # 如果是第一次读取，或者文件内容发生了变化
+            if current_data != last_known_data:
+                log.info("检测到 aatest_opportunities.json 文件内容更新，正在广播...")
+                broadcast_json = json.dumps(current_data, ensure_ascii=False, default=str)
+                await manager.broadcast(broadcast_json)
+                last_known_data = current_data
             
-            # 广播包含AI分析的完整数据
-            if analyzed_opportunities:
-                opportunities_json = json.dumps(analyzed_opportunities, ensure_ascii=False)
-                await manager.broadcast(opportunities_json)
-                print(f">>> [后台任务] 已广播 {len(analyzed_opportunities)} 条附带AI分析的机会。")
-
-        else:
-            print(">>> [后台任务] 本轮未发现符合条件的机会。")
+        except FileNotFoundError:
+            # 在扫描器第一次运行前，文件可能不存在，这是正常情况
+            log.warning("latest_opportunities.json 文件暂未找到，等待扫描器生成...")
+        except json.JSONDecodeError:
+            log.error("读取 latest_opportunities.json 文件失败，可能是JSON格式错误。")
+        except Exception as e:
+            log.error(f"文件监视任务发生未知错误: {e}", exc_info=True)
             
-        # 每隔一段时间运行，例如60秒。真实场景中可能需要更长间隔。
-        await asyncio.sleep(60)
-
+        # 每隔3秒检查一次文件
+        await asyncio.sleep(3)
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(background_scanner())
+    log.info("服务器启动...")
+    init_db()
+    log.info("文件监视后台任务已创建。")
+    asyncio.create_task(file_watcher_task())
 
-# --- 4. 根端点 (保持不变) ---
+# --- 4. 根端点 (不变) ---
 @app.get("/")
 def read_root():
+    log.info("接收到根路径'/'的GET请求。")
     return {"status": "ok", "message": "欢迎使用 AlphaHunter API"}
 
-# --- 5. 修正和简化的WebSocket端点 ---
+# --- 5. WebSocket端点 (不变) ---
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
-    # 这是我们用来判断路由是否被匹配到的关键证据！
-    print("---!!! WebSocket连接请求已到达端点 !!!---")
+    log.info("---!!! WebSocket连接请求已到达端点 !!!---")
     
     await manager.connect(websocket)
     try:
@@ -125,4 +96,4 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        print("---!!! 一个客户端已断开连接 !!!---")
+        
