@@ -12,31 +12,39 @@ def run_strategic_analysis(tickers: list):
     运行离线战略分析的核心函数。
     """
     log.info(f"--- [V4.5 离线战略分析器] 开始为 {len(tickers)} 支股票执行分析 ---")
-    
-    # 1. 获取大量的历史日线数据
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=730)
+    log.warning("--- !!! 注意：当前处于AI分析模块的模拟测试模式 !!! ---")
+
+    # a. 先获取一份真实的历史数据作为AI分析的上下文
+    # 我们只使用列表中的第一支股票作为模拟的蓝本
+    first_ticker = tickers[0] if tickers else "sz.002475"
+    log.info(f"正在获取'{first_ticker}'的历史数据作为模拟机会的上下文...")
+
     historical_data = get_historical_daily_data(
-        tickers=tickers,
-        start_date=start_date.strftime('%Y-%m-%d'),
-        end_date=end_date.strftime('%Y-%m-%d')
+        tickers=[first_ticker],
+        start_date=(datetime.today() - timedelta(days=730)).strftime('%Y-%m-%d'),
+        end_date=datetime.today().strftime('%Y-%m-%d')
     )
-    
-    if not historical_data:
-        log.error("未能获取到任何历史数据，分析中止。")
+
+    if not historical_data or first_ticker not in historical_data:
+        log.error("无法获取用于模拟的上下文历史数据，测试中止。")
         return
 
-    # 2. 使用战略扫描器发现潜在机会
-    breakout_opportunities = scan_strategic_breakouts(historical_data)
+    # b. 基于真实数据，手工构造一个“完美”的虚拟机会
+    last_day = historical_data[first_ticker].iloc[-1]
     
-    if not breakout_opportunities:
-        log.info("在指定的股票池中，未发现符合“箱体突破”条件的战略机会。")
-        # 即使没有机会，也生成一个空的JSON文件
-        output_data = {"strategic_opportunities": []}
-        with open("strategic_recommendations.json", "w", encoding="utf-8") as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=4)
-        log.info("已生成空的 strategic_recommendations.json 文件。")
-        return
+    mock_opportunity = {
+        "ticker": f"{first_ticker} (模拟演示)",
+        "breakout_date": last_day['date'],
+        "breakout_price": last_day['close'] * 1.05,
+        "box_high": last_day['close'],
+        "box_low": last_day['close'] * 0.8,
+        "consolidation_period_days": 60,
+        "consolidation_avg_volume": last_day['volume'] / 2,
+        "breakout_volume": last_day['volume'] * 2,
+        "full_historical_data": historical_data[first_ticker]
+    }
+    breakout_opportunities = [mock_opportunity]
+    log.success("已成功构建一个用于测试的虚拟“箱体突破”机会。")
 
     # 3. 对每个机会调用AI进行深度分析
     analyzed_reports = []
@@ -61,7 +69,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--tickers',
         type=str,
-        default="sz.002475,sh.600519", # 默认分析立讯精密和贵州茅台
+        default="sz.002475", # 默认只分析一支股票作为演示蓝本
         help='要分析的股票代码列表，以逗号分隔。例如: "sh.600036,sz.000001"'
     )
     args = parser.parse_args()
