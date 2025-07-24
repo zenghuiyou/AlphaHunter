@@ -1,7 +1,13 @@
 fastapi
-uvicorn[standard]
+uvicorn
 gunicorn
+websockets
 pandas
-requests
 baostock
 zhipuai
+akshare
+loguru
+tenacity
+sqlalchemy
+pytest
+schedule
