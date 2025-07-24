@@ -1,9 +1,9 @@
 import pandas as pd
 from typing import Dict, Any
-from zhipuai import ZhipuAI
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
-from src.config import settings
 from src.app.logger_config import log
+from src.config import settings
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+from zhipuai import ZhipuAI
 
 @retry(
     stop=stop_after_attempt(3),
@@ -119,6 +119,84 @@ def get_analysis_from_glm4(opportunity: Dict[str, Any]) -> str:
         log.error(f"调用智谱AI API时发生严重错误: {e}")
         # 抛出异常以触发tenacity重试
         raise e
+
+
+def get_strategic_analysis_from_glm4(opportunity: dict) -> str:
+    """
+    (V4.5 新增)
+    调用ZhipuAI的glm-4-plus模型，对识别出的“箱体突破”战略机会进行深度、专业的复盘和前景分析。
+
+    :param opportunity: 一个包含突破机会详细信息的字典。
+    :return: 由AI生成的Markdown格式的深度分析报告。
+    """
+    log.info(f"--- [V4.5] 开始为股票 {opportunity['ticker']} 生成战略分析报告 ---")
+    
+    # 为了防止prompt过长，我们只取最近250个交易日的数据给AI
+    recent_history_df = opportunity['full_historical_data'].tail(250)
+    history_summary = recent_history_df[['date', 'open', 'high', 'low', 'close', 'volume', 'pctChg']].to_string()
+
+    prompt = f"""
+请扮演一位顶级的中国A股市场首席策略分析师。
+
+你的任务是对一个刚刚出现经典“箱体突破”技术形态的股票进行全面、深度的战略评估。
+
+---
+### **核心事件：技术形态突破**
+- **股票代码**: {opportunity['ticker']}
+- **突破日期**: {opportunity['breakout_date']}
+- **突破日收盘价**: {opportunity['breakout_price']:.2f}
+- **事件描述**: 该股票在经历了长达 **{opportunity['consolidation_period_days']}** 个交易日的箱体盘整后，于今日以放量形式成功向上突破了箱体上轨 **{opportunity['box_high']:.2f}**。
+
+---
+### **盘整期关键数据**
+- **盘整区间**: {opportunity['box_low']:.2f} - {opportunity['box_high']:.2f}
+- **盘整期日均成交量**: {opportunity['consolidation_avg_volume']:.0f}
+- **突破日成交量**: {opportunity['breakout_volume']:.0f} (为盘整期均量的 **{opportunity['breakout_volume']/opportunity['consolidation_avg_volume']:.2f}** 倍)
+
+---
+### **近一年历史日线数据摘要**
+```
+{history_summary}
+```
+
+---
+### **你的分析任务 (请以Markdown格式输出)**
+
+1.  **突破形态质量评估**:
+    *   **复盘**: 这次长达 {opportunity['consolidation_period_days']} 天的盘整期，其形态是否标准？成交量在盘整后期是否有萎缩迹象？
+    *   **定性**: 本次突破是“真突破”还是“假突破”的可能性有多大？成交量的放大程度是否足够支撑后续行情？请结合历史数据给出你的判断依据。
+
+2.  **上涨潜力与目标价位预估**:
+    *   **量度涨幅**: 根据经典的箱体理论，本次突破的“最小理论上涨目标价位”是多少？(目标价 = 箱体上轨 + (箱体上轨 - 箱体下轨))
+    *   **关键阻力**: 从历史数据看，上方有哪些关键的历史高点或成交密集区会形成阻力？
+
+3.  **主要风险点提示**:
+    *   如果突破失败，可能会回踩到哪些关键支撑位？
+    *   当前市场整体环境（大盘走势）对这次突破是助力还是阻力？
+    *   有没有其他潜在的风险需要注意？
+
+4.  **综合投资建议**:
+    *   **一句话总结**: 对这次投资机会给出一个清晰、明确的定性结论。
+    *   **操作策略**: 如果你是基金经理，你会如何操作？是立即买入，还是等待回踩确认？仓位如何控制？
+"""
+
+    try:
+        client = ZhipuAI(api_key=settings.ZHIPUAI_API_KEY)
+        response = client.chat.completions.create(
+            model="glm-4-plus",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            top_p=0.8,
+            stream=False,
+        )
+        final_report = response.choices[0].message.content
+        
+        log.success(f"--- [V4.5] 成功为 {opportunity['ticker']} 生成战略分析报告 ---")
+        return final_report.strip()
+
+    except Exception as e:
+        log.error(f"调用智谱AI时发生严重错误: {e}")
+        return f"无法为 {opportunity['ticker']} 生成分析报告，错误: {e}"
 
 
 # --- 本地测试代码 ---
