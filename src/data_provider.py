@@ -245,12 +245,11 @@ def get_historical_daily_data(tickers: list, start_date: str, end_date: str) -> 
                 frequency="d",
                 adjustflag="2"  # 后复权
             )
-            if rs.error_code == '0' and rs.get_data().shape[0] > 0:
-                df = rs.get_data()
+            
+            result_df = rs.get_data() # 只调用一次 get_data()，并将结果存起来
 
-                # --- 核心调试代码 ---
-                log.debug(f"--- 原始数据预览 ({ticker}) ---\n{df.head().to_string()}")
-                # --- 结束调试代码 ---
+            if rs.error_code == '0' and not result_df.empty:
+                df = result_df # 使用存储的结果
 
                 # 数据类型转换，方便后续计算
                 data_types = {
