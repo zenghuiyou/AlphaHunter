@@ -1,45 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 
-// V4.0 新增：公司概况
-interface CompanyProfile {
-  industry: string;
-  total_market_cap: string;
-  circulating_market_cap: string;
-}
-
-// V4.0 新增：财务指标
-interface FinancialIndicators {
-  pe_ratio: number | string;
-  pb_ratio: number | string;
-  roe: number | string;
-}
-
-// V4.0 新增：资金流向
-interface FundFlow {
-  main_net_inflow: string;
-  super_large_net_inflow: string;
-}
-
-// V4.0 核心数据结构升级
-interface Opportunity {
-  // 技术面基础数据
-  ticker: string;
-  price: number;
-  change_pct: number;
-  
-  // AkShare 增强数据
-  company_profile?: CompanyProfile;
-  financial_indicators?: FinancialIndicators;
-  fund_flow?: FundFlow;
-  recent_news?: string[];
-  
-  // AI 分析报告 (暂时保持字符串，下一步UI重构时再结构化)
-  ai_analysis: string;
-}
-
-// V4.0 新增：卖出提醒的数据结构
+// --- 数据接口定义 ---
+interface CompanyProfile { industry?: string }
+interface FinancialIndicators { pe_ratio?: number }
+interface FundFlow { main_inflow?: string }
 interface SellAlert {
   type: 'SELL_ALERT';
   ticker: string;
@@ -49,12 +15,84 @@ interface SellAlert {
   profit_pct: number;
 }
 
-const opportunities = ref<Opportunity[]>([])
-const sellAlerts = ref<SellAlert[]>([]) // 新增：用于存放卖出提醒
-const connectionStatus = ref('正在连接...')
-const selectedTicker = ref<string | null>(null)
+interface RealtimeOpportunity {
+  ticker: string;
+  price: number;
+  change_pct: number;
+  company_profile?: CompanyProfile;
+  financial_indicators?: FinancialIndicators;
+  fund_flow?: FundFlow;
+  recent_news?: string[];
+  ai_analysis: string;
+}
 
-// --- Methods ---
+interface StrategicOpportunity {
+  ticker: string;
+  opportunity_details: {
+    breakout_date: string;
+    breakout_price: number;
+    box_high: number;
+    box_low: number;
+  };
+  ai_strategic_report: string;
+}
+
+// --- 响应式状态 ---
+const connectionStatus = ref('正在连接...')
+const opportunities = ref<RealtimeOpportunity[]>([])
+const sellAlerts = ref<SellAlert[]>([])
+const strategicOpportunities = ref<StrategicOpportunity[]>([]) // 新增：存储战略机会
+const selectedTicker = ref<string | null>(null)
+const activeTab = ref<'realtime' | 'strategic'>('realtime') // 新增：控制标签页显示
+
+let socket: WebSocket | null = null
+
+// --- WebSocket 连接逻辑 ---
+const connectWebSocket = () => {
+  // 从环境变量中读取WebSocket URL
+  // Vite会自动根据当前环境 (development/production) 加载对应的.env文件
+  const wsUrl = import.meta.env.VITE_APP_WEBSOCKET_URL || 'ws://localhost:8000/ws/dashboard';
+
+  // 使用获取到的URL建立连接
+  socket = new WebSocket(wsUrl);
+
+  socket.onopen = () => {
+    connectionStatus.value = '连接成功！'
+    console.log('WebSocket connection established.')
+  }
+
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data)
+    
+    // V4.5: 根据消息类型分发数据
+    if (message.type === 'REALTIME_UPDATE') {
+      opportunities.value = message.data.new_opportunities || []
+      sellAlerts.value = message.data.sell_alerts || []
+    } else if (message.type === 'STRATEGIC_UPDATE') {
+      strategicOpportunities.value = message.data.strategic_opportunities || []
+    }
+  }
+
+  socket.onerror = (error) => {
+    connectionStatus.value = '连接错误！'
+    console.error('WebSocket error:', error)
+  }
+
+  socket.onclose = () => {
+    connectionStatus.value = '连接已断开'
+    console.log('WebSocket connection closed.')
+  }
+}
+
+// --- 生命周期钩子 ---
+onMounted(() => { connectWebSocket() })
+onUnmounted(() => {
+  if (socket) {
+    socket.close();
+  }
+})
+
+// --- UI辅助函数 ---
 const toggleRow = (ticker: string) => {
   if (selectedTicker.value === ticker) {
     selectedTicker.value = null; // 如果再次点击已展开的行，则收起
@@ -63,102 +101,107 @@ const toggleRow = (ticker: string) => {
   }
 }
 
-const getParsedAnalysis = (analysis: string) => {
-  // 使用 'as any' 来绕过 marked 库可能存在的类型定义问题
-  return (marked as any)(analysis);
+const getParsedMarkdown = (markdown: string) => {
+  return marked(markdown)
 }
-
-onMounted(() => {
-  // 从环境变量中读取WebSocket URL
-  // Vite会自动根据当前环境 (development/production) 加载对应的.env文件
-  const wsUrl = import.meta.env.VITE_APP_WEBSOCKET_URL || 'ws://localhost:8000/ws/dashboard';
-
-  // 使用获取到的URL建立连接
-  const ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    connectionStatus.value = '连接成功！'
-    console.log('WebSocket connection established.')
-  }
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      // V4.0: 处理新的复合数据结构
-      if (data.new_opportunities) {
-        opportunities.value = data.new_opportunities
-      }
-      if (data.sell_alerts && data.sell_alerts.length > 0) {
-        // 将新的卖出提醒添加到列表开头，使其最先显示
-        sellAlerts.value = [...data.sell_alerts, ...sellAlerts.value];
-      }
-    } catch (error) {
-      console.error('Error parsing WebSocket message:', error)
-    }
-  }
-
-  ws.onerror = (error) => {
-    connectionStatus.value = '连接错误！'
-    console.error('WebSocket error:', error)
-  }
-
-  ws.onclose = () => {
-    connectionStatus.value = '连接已断开'
-    console.log('WebSocket connection closed.')
-  }
-})
 </script>
 
 <template>
-  <main>
-    <h1>AlphaHunter V4.0 决策辅助系统</h1>
-    <p>连接状态: <span :class="connectionStatus === '连接成功！' ? 'status-ok' : 'status-error'">{{ connectionStatus }}</span></p>
+  <main class="dashboard">
+    <header class="dashboard-header">
+      <h1>AlphaHunter V4.5 决策辅助系统</h1>
+      <p class="connection-status" :class="{ 'connected': connectionStatus === '连接成功！' }">
+        连接状态: <strong>{{ connectionStatus }}</strong>
+      </p>
+    </header>
 
-    <!-- 卖出提醒区域 -->
-    <div v-if="sellAlerts.length > 0" class="alerts-container">
-      <h2>平仓提醒</h2>
-      <div v-for="(alert, index) in sellAlerts" :key="index" class="alert-card" :class="alert.profit_pct >= 0 ? 'profit' : 'loss'">
-        <p><strong>股票代码:</strong> {{ alert.ticker }}</p>
-        <p><strong>平仓原因:</strong> {{ alert.reason }}</p>
-        <p><strong>买入价:</strong> {{ alert.buy_price.toFixed(2) }}</p>
-        <p><strong>卖出价:</strong> {{ alert.sell_price.toFixed(2) }}</p>
-        <p><strong>盈亏:</strong> <span class="profit-pct">{{ (alert.profit_pct * 100).toFixed(2) }}%</span></p>
+    <!-- V4.5 新增: 标签页切换 -->
+    <div class="tabs">
+      <button @click="activeTab = 'realtime'" :class="{ 'active': activeTab === 'realtime' }">
+        实时战术机会
+      </button>
+      <button @click="activeTab = 'strategic'" :class="{ 'active': activeTab === 'strategic' }">
+        盘后战略精选
+      </button>
+    </div>
+
+    <!-- 实时战术机会视图 -->
+    <div v-if="activeTab === 'realtime'" class="tab-content">
+      <!-- 卖出提醒区域 -->
+      <div v-if="sellAlerts.length > 0" class="alerts-container">
+        <h2>平仓提醒</h2>
+        <div v-for="(alert, index) in sellAlerts" :key="index" class="alert-card" :class="alert.profit_pct >= 0 ? 'profit' : 'loss'">
+          <p><strong>股票代码:</strong> {{ alert.ticker }}</p>
+          <p><strong>平仓原因:</strong> {{ alert.reason }}</p>
+          <p><strong>买入价:</strong> {{ alert.buy_price.toFixed(2) }}</p>
+          <p><strong>卖出价:</strong> {{ alert.sell_price.toFixed(2) }}</p>
+          <p><strong>盈亏:</strong> <span class="profit-pct">{{ (alert.profit_pct * 100).toFixed(2) }}%</span></p>
+        </div>
+      </div>
+
+      <!-- 新机会列表 -->
+      <h2>新机会扫描</h2>
+      <div v-if="opportunities.length > 0">
+        <table class="opportunity-table">
+          <thead>
+            <tr>
+              <th>股票代码</th>
+              <th>当前价格</th>
+              <th>涨跌幅</th>
+              <th>行业</th>
+              <th>市盈率(PE)</th>
+              <th>AI分析摘要</th>
+            </tr>
+          </thead>
+          <template v-for="opp in opportunities" :key="opp.ticker">
+            <tr @click="toggleRow(opp.ticker)" class="data-row">
+              <td>{{ opp.ticker }}</td>
+              <td>{{ opp.price.toFixed(2) }}</td>
+              <td>{{ opp.change_pct.toFixed(2) }}%</td>
+              <td>{{ opp.company_profile?.industry || 'N/A' }}</td>
+              <td>{{ opp.financial_indicators?.pe_ratio || 'N/A' }}</td>
+              <td class="analysis-summary">{{ opp.ai_analysis.substring(0, 50) }}...</td>
+            </tr>
+            <tr v-if="selectedTicker === opp.ticker" class="details-row">
+              <td colspan="6">
+                <div class="analysis-details" v-html="getParsedMarkdown(opp.ai_analysis)"></div>
+              </td>
+            </tr>
+          </template>
+        </table>
+      </div>
+      <div v-else>
+        <p>正在等待新的机会...</p>
       </div>
     </div>
 
-    <!-- 新机会列表 -->
-    <h2>新机会扫描</h2>
-    <div v-if="opportunities.length > 0">
-      <table class="opportunity-table">
-        <thead>
-          <tr>
-            <th>股票代码</th>
-            <th>当前价格</th>
-            <th>涨跌幅</th>
-            <th>行业</th>
-            <th>市盈率(PE)</th>
-            <th>AI分析摘要</th>
-          </tr>
-        </thead>
-        <template v-for="opp in opportunities" :key="opp.ticker">
-          <tr @click="toggleRow(opp.ticker)" class="data-row">
-            <td>{{ opp.ticker }}</td>
-            <td>{{ opp.price.toFixed(2) }}</td>
-            <td>{{ opp.change_pct.toFixed(2) }}%</td>
-            <td>{{ opp.company_profile?.industry || 'N/A' }}</td>
-            <td>{{ opp.financial_indicators?.pe_ratio || 'N/A' }}</td>
-            <td class="analysis-summary">{{ opp.ai_analysis.substring(0, 50) }}...</td>
-          </tr>
-          <tr v-if="selectedTicker === opp.ticker" class="details-row">
-            <td colspan="6">
-              <div class="analysis-details" v-html="getParsedAnalysis(opp.ai_analysis)"></div>
-            </td>
-          </tr>
-        </template>
-      </table>
-    </div>
-    <div v-else>
-      <p>正在等待新的机会...</p>
+    <!-- 盘后战略精选视图 -->
+    <div v-if="activeTab === 'strategic'" class="tab-content">
+      <div v-if="strategicOpportunities.length === 0" class="no-data">
+        <h2>暂无战略机会</h2>
+        <p>离线分析器尚未运行，或未发现符合条件的战略机会。</p>
+      </div>
+      
+      <div v-else class="strategic-opportunities-grid">
+        <div v-for="opp in strategicOpportunities" :key="opp.ticker" class="strategic-card">
+          <div class="card-header">
+            <h3>{{ opp.ticker }}</h3>
+            <span class="breakout-date">突破日期: {{ opp.opportunity_details.breakout_date }}</span>
+          </div>
+          <div class="card-body">
+            <div class="opportunity-details">
+              <h4>突破详情</h4>
+              <ul>
+                <li><strong>突破价格:</strong> {{ opp.opportunity_details.breakout_price.toFixed(2) }}</li>
+                <li><strong>箱体上轨:</strong> {{ opp.opportunity_details.box_high.toFixed(2) }}</li>
+                <li><strong>箱体下轨:</strong> {{ opp.opportunity_details.box_low.toFixed(2) }}</li>
+              </ul>
+            </div>
+            <div class="ai-report" v-html="getParsedMarkdown(opp.ai_strategic_report)">
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </main>
 </template>

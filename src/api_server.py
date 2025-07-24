@@ -38,45 +38,62 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- 3. (V4.2 新架构) 文件监视与广播任务 ---
-# 用于存储上一次文件内容的全局变量
-last_known_data = None
+# --- 3. (V4.5 升级) 通用文件监视与广播任务 ---
+# 用于存储不同文件上一次内容的全局字典
+last_known_contents = {}
 
-async def file_watcher_task():
+async def watch_and_broadcast(file_path: str, event_type: str):
     """
-    后台任务，监视latest_opportunities.json文件的变化，
-    并在内容更新时，将新数据广播给所有客户端。
+    通用后台任务，监视指定JSON文件的变化，并在内容更新时，
+    将新数据以特定的事件类型广播给所有客户端。
     """
-    global last_known_data
+    global last_known_contents
+    last_known_contents[file_path] = None # 初始化
+
     while True:
         try:
-            with open("latest_opportunities.json", "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 current_data = json.load(f)
             
-            # 如果是第一次读取，或者文件内容发生了变化
-            if current_data != last_known_data:
-                log.info("检测到 aatest_opportunities.json 文件内容更新，正在广播...")
-                broadcast_json = json.dumps(current_data, ensure_ascii=False, default=str)
+            if current_data != last_known_contents.get(file_path):
+                log.info(f"检测到 {file_path} 文件内容更新，正在以 '{event_type}' 类型广播...")
+                
+                # 包装最终的广播数据
+                broadcast_payload = {
+                    "type": event_type,
+                    "data": current_data
+                }
+                
+                broadcast_json = json.dumps(broadcast_payload, ensure_ascii=False, default=str)
                 await manager.broadcast(broadcast_json)
-                last_known_data = current_data
+                last_known_contents[file_path] = current_data
             
         except FileNotFoundError:
-            # 在扫描器第一次运行前，文件可能不存在，这是正常情况
-            log.warning("latest_opportunities.json 文件暂未找到，等待扫描器生成...")
+            log.warning(f"{file_path} 文件暂未找到，等待扫描器生成...")
         except json.JSONDecodeError:
-            log.error("读取 latest_opportunities.json 文件失败，可能是JSON格式错误。")
+            log.error(f"读取 {file_path} 文件失败，可能是JSON格式错误。")
         except Exception as e:
-            log.error(f"文件监视任务发生未知错误: {e}", exc_info=True)
+            log.error(f"监视 {file_path} 的任务发生未知错误: {e}", exc_info=True)
             
-        # 每隔3秒检查一次文件
-        await asyncio.sleep(3)
+        await asyncio.sleep(5) # 统一轮询间隔为5秒
 
 @app.on_event("startup")
 async def startup_event():
     log.info("服务器启动...")
     init_db()
-    log.info("文件监视后台任务已创建。")
-    asyncio.create_task(file_watcher_task())
+    
+    # 创建两个并行的后台任务，分别监视不同的文件
+    log.info("创建实时机会监视任务 (REALTIME_UPDATE)...")
+    asyncio.create_task(watch_and_broadcast(
+        file_path="latest_opportunities.json",
+        event_type="REALTIME_UPDATE"
+    ))
+    
+    log.info("创建战略报告监视任务 (STRATEGIC_UPDATE)...")
+    asyncio.create_task(watch_and_broadcast(
+        file_path="strategic_recommendations.json",
+        event_type="STRATEGIC_UPDATE"
+    ))
 
 # --- 4. 根端点 (不变) ---
 @app.get("/")
