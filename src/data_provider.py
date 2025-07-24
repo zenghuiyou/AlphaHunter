@@ -3,6 +3,7 @@ import baostock as bs
 import json
 from datetime import datetime, timedelta
 from src.app.logger_config import log
+import time
 
 # 注意：在此次重构中，我们将tenacity的重试逻辑移至上层调用方 (run_scanner.py)
 # 因此移除函数装饰器，让函数本身只负责单次的数据获取逻辑
@@ -212,6 +213,69 @@ def run_data_pipeline():
         json.dump(output_data, f, ensure_ascii=False, indent=4, default=str)
     
     log.success(f"--- 数据流水线执行完毕，结果已写入 latest_opportunities.json ---")
+
+def get_historical_daily_data(tickers: list, start_date: str, end_date: str) -> dict:
+    """
+    (V4.5 新增)
+    为离线战略分析模块获取指定股票池的完整历史日线数据。
+
+    :param tickers: 股票代码列表，例如 ["sh.600036", "sz.000001"]
+    :param start_date: 开始日期，格式 'YYYY-MM-DD'
+    :param end_date: 结束日期，格式 'YYYY-MM-DD'
+    :return: 一个字典，键为股票代码，值为包含该股票所有历史数据的DataFrame。
+    """
+    log.info(f"--- [V4.5] 开始为 {len(tickers)} 支股票获取从 {start_date} 到 {end_date} 的历史日线数据 ---")
+    
+    historical_data = {}
+    
+    lg = bs.login()
+    if lg.error_code != '0':
+        log.error(f"BaoStock登录失败: {lg.error_msg}")
+        return historical_data
+        
+    try:
+        for i, ticker in enumerate(tickers):
+            log.info(f"正在获取 {ticker} ({i+1}/{len(tickers)})...")
+            # a. 详细的日线数据
+            rs = bs.query_history_k_data_plus(
+                ticker,
+                "date,code,open,high,low,close,preclose,volume,amount,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="2"  # 后复权
+            )
+            if rs.error_code == '0' and rs.get_data().shape[0] > 0:
+                df = rs.get_data()
+
+                # --- 核心调试代码 ---
+                log.debug(f"--- 原始数据预览 ({ticker}) ---\n{df.head().to_string()}")
+                # --- 结束调试代码 ---
+
+                # 数据类型转换，方便后续计算
+                data_types = {
+                    'open': float, 'high': float, 'low': float, 'close': float,
+                    'preclose': float, 'volume': int, 'amount': float, 'turn': float,
+                    'pctChg': float, 'peTTM': float, 'pbMRQ': float, 'psTTM': float,
+                    'pcfNcfTTM': float
+                }
+                for col, dtype in data_types.items():
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                historical_data[ticker] = df
+            else:
+                log.warning(f"未能获取到 {ticker} 的历史数据。错误信息: {rs.error_msg}")
+            
+            # 防止请求过于频繁
+            time.sleep(0.1)
+
+    finally:
+        bs.logout()
+        log.info("已登出BaoStock。")
+
+    log.success(f"--- [V4.5] 成功获取了 {len(historical_data)} 支股票的历史数据 ---")
+    return historical_data
 
 if __name__ == '__main__':
     run_data_pipeline()
