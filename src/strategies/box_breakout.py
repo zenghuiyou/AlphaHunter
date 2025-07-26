@@ -66,11 +66,8 @@ class BoxBreakoutStrategy(BaseStrategy):
                         'consolidation_period_days': self.consolidation_days,
                         'breakout_volume': breakout_day['volume'],
                         'consolidation_avg_volume': consolidation_avg_volume,
-                        'full_historical_data': df, # 传递完整历史数据供AI分析
-                        'description': (
-                            f"在经历{self.consolidation_days}天盘整后, "
-                            f"于{breakout_day['date']}放量突破箱体。"
-                        )
+                        'full_historical_data': df,
+                        'description': f"在经历{self.consolidation_days}天盘整后, 于{breakout_day['date']}放量突破箱体。"
                     }
                     opportunities.append(opportunity)
                     log.success(f"发现机会！[{ticker}] 符合 [{self.name}] 策略。")

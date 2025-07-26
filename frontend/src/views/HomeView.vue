@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { marked } from 'marked'
 
 // --- 数据接口定义 ---
@@ -26,15 +26,27 @@ interface RealtimeOpportunity {
   ai_analysis: string;
 }
 
+// V5.0 最终修复版：与后端数据结构完全对齐
 interface StrategicOpportunity {
   ticker: string;
-  opportunity_details: {
-    breakout_date: string;
-    breakout_price: number;
-    box_high: number;
-    box_low: number;
+  strategy_name: string;
+  breakout_date: string;
+  breakout_price: number;
+  description: string;
+  ai_analysis: string;
+  // 以下为数据增强字段，可能不存在，设为可选
+  company_profile?: {
+    industry?: string;
+    total_market_cap?: string;
+    circulating_market_cap?: string;
   };
-  ai_strategic_report: string;
+  financial_indicators?: {
+    pe_ratio?: number | string;
+    pb_ratio?: number | string;
+    roe?: number | string;
+  };
+  recent_news?: string[];
+  fund_flow?: any;
 }
 
 // --- 响应式状态 ---
@@ -62,14 +74,21 @@ const connectWebSocket = () => {
   }
 
   socket.onmessage = (event) => {
-    const message = JSON.parse(event.data)
-    
-    // V4.5: 根据消息类型分发数据
-    if (message.type === 'REALTIME_UPDATE') {
-      opportunities.value = message.data.new_opportunities || []
-      sellAlerts.value = message.data.sell_alerts || []
-    } else if (message.type === 'STRATEGIC_UPDATE') {
-      strategicOpportunities.value = message.data.strategic_opportunities || []
+    try {
+      const message = JSON.parse(event.data);
+      console.log("WebSocket message received:", message); // 保留用于调试
+
+      // V4.5: 根据消息类型分发数据
+      if (message.type === 'REALTIME_UPDATE') {
+        opportunities.value = message.data.new_opportunities || []
+        sellAlerts.value = message.data.sell_alerts || []
+      } else if (message.type === 'STRATEGIC_UPDATE') {
+        // V5.0 最终修复版：直接使用 message.data
+        strategicOpportunities.value = message.data || [];
+        console.log("Updated strategic opportunities:", strategicOpportunities.value);
+      }
+    } catch (error) {
+      console.error("Error parsing or processing WebSocket message:", error);
     }
   }
 
@@ -104,6 +123,20 @@ const toggleRow = (ticker: string) => {
 const getParsedMarkdown = (markdown: string) => {
   return marked(markdown)
 }
+
+// 新增：计算属性，用于安全地渲染AI分析报告
+const renderedMarkdown = (htmlContent: string) => {
+  return marked(htmlContent || '');
+};
+
+// 新增：用于控制战略机会的展开/收起
+const toggleAccordion = (ticker: string) => {
+  if (selectedTicker.value === ticker) {
+    selectedTicker.value = null;
+  } else {
+    selectedTicker.value = ticker;
+  }
+};
 </script>
 
 <template>
@@ -183,23 +216,39 @@ const getParsedMarkdown = (markdown: string) => {
       </div>
       
       <div v-else class="strategic-opportunities-grid">
-        <div v-for="opp in strategicOpportunities" :key="opp.ticker" class="strategic-card">
-          <div class="card-header">
-            <h3>{{ opp.ticker }}</h3>
-            <span class="breakout-date">突破日期: {{ opp.opportunity_details.breakout_date }}</span>
-          </div>
-          <div class="card-body">
-            <div class="opportunity-details">
-              <h4>突破详情</h4>
-              <ul>
-                <li><strong>突破价格:</strong> {{ opp.opportunity_details.breakout_price.toFixed(2) }}</li>
-                <li><strong>箱体上轨:</strong> {{ opp.opportunity_details.box_high.toFixed(2) }}</li>
-                <li><strong>箱体下轨:</strong> {{ opp.opportunity_details.box_low.toFixed(2) }}</li>
-              </ul>
+        <div v-if="strategicOpportunities.length > 0">
+          <div v-for="opp in strategicOpportunities" :key="opp.ticker" class="opportunity-card strategic-card">
+            <!-- Card header -->
+            <div class="card-header">
+              <h3 class="ticker">{{ opp.ticker }}</h3>
+              <span class="strategy-badge">{{ opp.strategy_name }}</span>
             </div>
-            <div class="ai-report" v-html="getParsedMarkdown(opp.ai_strategic_report)">
+            <!-- Card body -->
+            <div class="card-body">
+              <p class="description">{{ opp.description }}</p>
+              <div class="details">
+                <span><strong>信号日期:</strong> {{ opp.breakout_date }}</span>
+                <span v-if="opp.breakout_price"><strong>信号价格:</strong> {{ opp.breakout_price.toFixed(2) }}</span>
+              </div>
+            </div>
+            <!-- Accordion for AI analysis -->
+            <div class="ai-section">
+              <button @click="toggleAccordion(opp.ticker)" class="accordion-button">
+                深度AI战略分析
+                <span class="arrow" :class="{ 'is-rotated': selectedTicker === opp.ticker }">▼</span>
+              </button>
+              <div 
+                class="accordion-content" 
+                :class="{ 'is-open': selectedTicker === opp.ticker }"
+              >
+                <div v-if="selectedTicker === opp.ticker" v-html="renderedMarkdown(opp.ai_analysis)"></div>
+              </div>
             </div>
           </div>
+        </div>
+        <div v-else class="no-opportunities">
+          <p class="title">暂无战略机会</p>
+          <p class="subtitle">离线分析器尚未运行，或未发现符合条件的战略机会。</p>
         </div>
       </div>
     </div>
@@ -255,6 +304,7 @@ tr:nth-child(even) {
 .analysis-details {
   max-width: 100%;
   overflow-x: auto;
+  color: #333; /* 增强可读性 */
 }
 .status-ok { color: #28a745; }
 .status-error { color: #dc3545; }
@@ -290,5 +340,142 @@ tr:nth-child(even) {
 }
 .profit-pct {
   font-weight: bold;
+}
+
+/* New styles for strategic opportunities */
+.strategic-opportunities-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 20px;
+}
+
+.strategic-card {
+  background-color: #f9f9f9;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s ease-in-out;
+}
+
+.strategic-card:hover {
+  transform: translateY(-5px);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #ccc;
+}
+
+.ticker {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #333;
+}
+
+.strategy-badge {
+  background-color: #007bff;
+  color: white;
+  padding: 0.4rem 0.8rem;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.card-body {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+.description {
+  font-size: 1rem;
+  color: #555;
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+.details {
+  font-size: 0.9rem;
+  color: #666;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ai-section {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #eee;
+}
+
+.accordion-button {
+  background-color: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  padding: 0.8rem 1.2rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  color: #333;
+  transition: background-color 0.3s ease;
+}
+
+.accordion-button:hover {
+  background-color: #e0e0e0;
+}
+
+.accordion-button .arrow {
+  transition: transform 0.3s ease;
+}
+
+.accordion-button .arrow.is-rotated {
+  transform: rotate(180deg);
+}
+
+.accordion-content {
+  max-height: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+  transition: all 0.4s ease-in-out;
+  background-color: #fcfcfc;
+  border-radius: 5px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: #333; /* 增强可读性 */
+}
+
+.accordion-content.is-open {
+  max-height: 1500px; /* A value larger than any expected content */
+  margin-top: 0.5rem;
+  padding: 1rem;
+  border: 1px solid #eee;
+}
+
+.no-opportunities {
+  text-align: center;
+  padding: 2rem;
+  color: #888;
+}
+
+.no-opportunities .title {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.no-opportunities .subtitle {
+  font-size: 1rem;
 }
 </style>

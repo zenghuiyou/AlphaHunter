@@ -1,27 +1,67 @@
+from pathlib import Path
+import importlib
+import pkgutil
 import pandas as pd
+from typing import List, Dict, Any
+from .strategies.base_strategy import BaseStrategy
 from src.app.logger_config import log
 from src.data_provider import get_realtime_market_data # 修正：导入正确的函数名
 from src.config import settings  # 导入配置
 
 
-def scan_opportunities(market_data: pd.DataFrame, threshold=3.0) -> pd.DataFrame:
+def load_strategies(strategies_path='src/strategies') -> List[BaseStrategy]:
     """
-    扫描市场数据以寻找交易机会。
-
-    基于预设的规则对输入的市场数据DataFrame进行分析。
-    当前规则：寻找 'change_pct' 大于 2.0 的股票。
-
-    Args:
-        market_data: 包含市场数据的Pandas DataFrame。
-
-    Returns:
-        一个新的Pandas DataFrame，仅包含符合条件的交易机会。
-        如果没有找到机会，则返回一个空的DataFrame。
+    动态加载指定路径下的所有策略模块。
     """
-    # 使用配置中的阈值，而不是硬编码的值
-    threshold = settings.SCANNER_CHANGE_PCT_THRESHOLD
-    opportunities = market_data[market_data['change_pct'] > threshold]
-    return opportunities
+    strategies = []
+    path = Path(strategies_path)
+    if not path.is_dir():
+        log.error(f"策略目录不存在: {strategies_path}")
+        return []
+    
+    log.info(f"--- 开始从 '{strategies_path}' 动态加载策略 ---")
+    
+    # 确保__init__.py存在，使其成为一个包
+    if not (path / "__init__.py").exists():
+        log.warning(f"策略目录 {strategies_path}缺少__init__.py文件，将自动创建。")
+        (path / "__init__.py").touch()
+
+    for _, name, _ in pkgutil.iter_modules([str(path)]):
+        if name == 'base_strategy':
+            continue  # 不加载基类
+        try:
+            module_name = f'src.strategies.{name}'
+            module = importlib.import_module(module_name)
+            for item in dir(module):
+                obj = getattr(module, item)
+                # 确保是BaseStrategy的子类，但不是BaseStrategy本身
+                if isinstance(obj, type) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
+                    strategy_instance = obj()
+                    strategies.append(strategy_instance)
+                    log.success(f"成功加载策略: {strategy_instance.name}")
+        except Exception as e:
+            log.error(f"加载策略模块 '{name}' 失败: {e}", exc_info=True)
+            
+    log.info(f"--- 共加载了 {len(strategies)} 个策略 ---")
+    return strategies
+
+def scan_opportunities(strategies: List[BaseStrategy], historical_data: Dict[str, pd.DataFrame]) -> List[Dict[str, Any]]:
+    """
+    使用所有已加载的策略，对提供的历史数据进行扫描。
+    """
+    all_opportunities = []
+    log.info(f"--- 开始使用 {len(strategies)} 个策略进行全面扫描 ---")
+
+    for strategy in strategies:
+        try:
+            # 每个策略独立扫描，并将结果合并
+            opportunities = strategy.scan(historical_data)
+            if opportunities:
+                all_opportunities.extend(opportunities)
+        except Exception as e:
+            log.error(f"策略 [{strategy.name}] 在扫描过程中发生错误: {e}", exc_info=True)
+            
+    return all_opportunities
 
 
 def scan_strategic_breakouts(historical_data: dict, consolidation_period=60, breakout_threshold=1.03) -> list:
@@ -98,10 +138,14 @@ if __name__ == '__main__':
     print(current_market_data.head()) # 打印部分数据即可
 
     # 2. 扫描机会
-    found_opportunities = scan_opportunities(current_market_data)
+    # 首先加载策略
+    strategies = load_strategies()
+    # 然后使用策略扫描市场数据
+    found_opportunities = scan_opportunities(strategies, {"test_ticker": current_market_data})
     print(f"\n[2] 扫描发现的机会 (change_pct > {settings.SCANNER_CHANGE_PCT_THRESHOLD}%):")
 
-    if not found_opportunities.empty:
-        print(found_opportunities)
-    else:
+    if not found_opportunities:
         print("未发现符合条件的机会。")
+    else:
+        for opp in found_opportunities:
+            print(opp)

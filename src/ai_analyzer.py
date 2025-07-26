@@ -121,82 +121,127 @@ def get_analysis_from_glm4(opportunity: Dict[str, Any]) -> str:
         raise e
 
 
-def get_strategic_analysis_from_glm4(opportunity: dict) -> str:
+def get_strategic_analysis_from_glm4(opportunity: Dict[str, Any]) -> str:
     """
-    (V4.5 新增)
-    调用ZhipuAI的glm-4-plus模型，对识别出的“箱体突破”战略机会进行深度、专业的复盘和前景分析。
+    [V5.0 最终重构版]
+    根据机会的“策略名称”，动态构建不同的分析prompt，解决数据结构不匹配的根本问题。
+    """
+    if not settings.ZHIPUAI_API_KEY or settings.ZHIPUAI_API_KEY == "Ycbc6048999334838bd99235c3d83d105.obCizMjN6pVPUeor":
+        log.error("错误: 请在 src/config.py 或环境变量中设置您的 ZHIPUAI_API_KEY。")
+        return "API Key 未配置或无效。"
 
-    :param opportunity: 一个包含突破机会详细信息的字典。
-    :return: 由AI生成的Markdown格式的深度分析报告。
-    """
-    log.info(f"--- [V4.5] 开始为股票 {opportunity['ticker']} 生成战略分析报告 ---")
+    ticker = opportunity.get('ticker', 'N/A')
+    strategy_name = opportunity.get('strategy_name', '未知策略')
+    log.info(f"--- [V5.0] 开始为股票 {ticker} (策略: {strategy_name}) 生成动态战略分析报告 ---")
+
+    # 1. 构建所有策略通用的数据增强部分
+    # 技术面
+    price = opportunity.get('price', 0)
+    change_pct = opportunity.get('change_pct', 0)
     
+    # 基本面
+    profile = opportunity.get('company_profile', {})
+    financials = opportunity.get('financial_indicators', {})
+    industry = profile.get('industry', 'N/A')
+    pe_ratio = financials.get('pe_ratio', 'N/A')
+    pb_ratio = financials.get('pb_ratio', 'N/A')
+    roe = financials.get('roe', 'N/A')
+
+    # 消息面
+    news = opportunity.get('recent_news', [])
+    news_str = "\n".join(f"- {n}" for n in news) if news else "无"
+    
+    # 资金面
+    fund_flow = opportunity.get('fund_flow', {})
+    main_inflow = fund_flow.get('main_net_inflow', 'N/A')
+    super_large_inflow = fund_flow.get('super_large_net_inflow', 'N/A')
+    fund_flow_str = f"""
+- **主力资金净流入**: {main_inflow}
+- **超级大单净流入**: {super_large_inflow}
+"""
+
     # 为了防止prompt过长，我们只取最近250个交易日的数据给AI
     recent_history_df = opportunity['full_historical_data'].tail(250)
     history_summary = recent_history_df[['date', 'open', 'high', 'low', 'close', 'volume', 'pctChg']].to_string()
 
-    prompt = f"""
-请扮演一位顶级的中国A股市场首席策略分析师。
-
-你的任务是对一个刚刚出现经典“箱体突破”技术形态的股票进行全面、深度的战略评估。
-
----
-### **核心事件：技术形态突破**
-- **股票代码**: {opportunity['ticker']}
-- **突破日期**: {opportunity['breakout_date']}
-- **突破日收盘价**: {opportunity['breakout_price']:.2f}
-- **事件描述**: 该股票在经历了长达 **{opportunity['consolidation_period_days']}** 个交易日的箱体盘整后，于今日以放量形式成功向上突破了箱体上轨 **{opportunity['box_high']:.2f}**。
-
----
-### **盘整期关键数据**
-- **盘整区间**: {opportunity['box_low']:.2f} - {opportunity['box_high']:.2f}
-- **盘整期日均成交量**: {opportunity['consolidation_avg_volume']:.0f}
-- **突破日成交量**: {opportunity['breakout_volume']:.0f} (为盘整期均量的 **{opportunity['breakout_volume']/opportunity['consolidation_avg_volume']:.2f}** 倍)
-
----
-### **近一年历史日线数据摘要**
-```
-{history_summary}
-```
-
----
-### **你的分析任务 (请以Markdown格式输出)**
-
-1.  **突破形态质量评估**:
-    *   **复盘**: 这次长达 {opportunity['consolidation_period_days']} 天的盘整期，其形态是否标准？成交量在盘整后期是否有萎缩迹象？
-    *   **定性**: 本次突破是“真突破”还是“假突破”的可能性有多大？成交量的放大程度是否足够支撑后续行情？请结合历史数据给出你的判断依据。
-
-2.  **上涨潜力与目标价位预估**:
-    *   **量度涨幅**: 根据经典的箱体理论，本次突破的“最小理论上涨目标价位”是多少？(目标价 = 箱体上轨 + (箱体上轨 - 箱体下轨))
-    *   **关键阻力**: 从历史数据看，上方有哪些关键的历史高点或成交密集区会形成阻力？
-
-3.  **主要风险点提示**:
-    *   如果突破失败，可能会回踩到哪些关键支撑位？
-    *   当前市场整体环境（大盘走势）对这次突破是助力还是阻力？
-    *   有没有其他潜在的风险需要注意？
-
-4.  **综合投资建议**:
-    *   **一句话总结**: 对这次投资机会给出一个清晰、明确的定性结论。
-    *   **操作策略**: 如果你是基金经理，你会如何操作？是立即买入，还是等待回踩确认？仓位如何控制？
+    common_prompt_part = f"""
+### 2. 增强数据：多维视角
+- **基本面**: 所属行业: **{industry}**, 市盈率(PE TTM): **{pe_ratio}**, 市净率(PB): **{pb_ratio}**, 净资产收益率(ROE): **{roe}**
+- **资金面**: 近期各类资金净流入情况:
+{fund_flow_str}
+- **消息面**: 近期相关新闻:
+{news_str}
 """
 
+    # 2. 根据策略名称，构建专属的分析模块
+    strategy_specific_prompt_part = ""
+    if strategy_name == "经典箱体突破":
+        strategy_specific_prompt_part = f"""
+### 1. 核心事件：经典箱体突破
+- **股票代码**: {ticker}
+- **突破日期**: {opportunity.get('breakout_date', 'N/A')}
+- **事件描述**: 该股票在经历了长达 **{opportunity.get('consolidation_period_days', 'N/A')}** 个交易日的箱体盘整后，以放量形式成功向上突破了箱体上轨 **{opportunity.get('box_high', 'N/A'):.2f}**。
+
+### 3. 你的分析任务 (请以Markdown格式输出)
+1.  **技术形态质量评估**: 本次突破是“真突破”还是“假突破”的可能性有多大？成交量的放大程度是否足够支撑后续行情？
+2.  **基本面与资金面共振分析**: 基本面和资金面是否支撑这次技术突破？
+3.  **上涨潜力与风险提示**: 根据箱体理论，上涨目标价位是多少？主要风险点在哪里？
+4.  **综合投资建议**: 明确给出“买入/观望/规避”的结论，并简述理由。
+"""
+    elif strategy_name == "均线金叉策略":
+        strategy_specific_prompt_part = f"""
+### 1. 核心事件：均线金叉
+- **股票代码**: {ticker}
+- **金叉日期**: {opportunity.get('breakout_date', 'N/A')}
+- **事件描述**: {opportunity.get('description', 'N/A')}
+
+### 3. 你的分析任务 (请以Markdown格式输出)
+1.  **趋势信号强度评估**: 这次金叉是在下跌后的低位形成，还是在长期上涨趋势中的延续信号？K线形态（如阳线实体大小）是否配合？
+2.  **基本面与资金面共振分析**: 公司基本面或主力资金动向，是否存在支撑股价开启新一轮上涨的因素？
+3.  **后续走势与风险提示**: 金叉形成后，通常的短期和中期阻力位在哪里？如果信号失败，关键的支撑位在哪里？
+4.  **综合投资建议**: 明确给出“买入/观望/规避”的结论，并简述理由。
+"""
+    else:
+        # 未知策略的默认prompt
+        strategy_specific_prompt_part = f"""
+### 1. 核心事件：未知策略信号
+- **股票代码**: {ticker}
+- **信号日期**: {opportunity.get('breakout_date', 'N/A')}
+- **事件描述**: {opportunity.get('description', 'N/A')}
+
+### 3. 你的分析任务 (请以Markdown格式输出)
+1.  **综合基本面与资金面分析**: 请基于增强数据，分析该公司近期的基本面和资金面状况。
+2.  **风险提示**: 结合现有信息，提示该股可能存在的投资风险。
+3.  **综合投资建议**: 谨慎地给出投资建议。
+"""
+
+    # 3. 组合成最终的prompt
+    final_prompt = f"""
+请扮演一位顶级的中国A股市场首席策略分析师。
+你的任务是对一只刚刚出现技术信号的股票，进行全面、深度的战略评估。
+---
+{strategy_specific_prompt_part}
+---
+{common_prompt_part}
+"""
+    
     try:
         client = ZhipuAI(api_key=settings.ZHIPUAI_API_KEY)
         response = client.chat.completions.create(
             model="glm-4-plus",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": final_prompt}],
             temperature=0.8,
             top_p=0.8,
             stream=False,
         )
-        final_report = response.choices[0].message.content
+        response_text = response.choices[0].message.content
         
-        log.success(f"--- [V4.5] 成功为 {opportunity['ticker']} 生成战略分析报告 ---")
-        return final_report.strip()
+        log.success(f"--- [V5.0] 成功为 {ticker} (策略: {strategy_name}) 生成动态战略分析报告 ---")
+        return response_text.strip()
 
     except Exception as e:
         log.error(f"调用智谱AI时发生严重错误: {e}")
-        return f"无法为 {opportunity['ticker']} 生成分析报告，错误: {e}"
+        return f"无法为 {ticker} (策略: {strategy_name}) 生成分析报告，错误: {e}"
 
 
 # --- 本地测试代码 ---
